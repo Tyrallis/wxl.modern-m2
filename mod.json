@@ -1,0 +1,15 @@
+{
+  "$schema": "../../sdk/schema/mod.json",
+  "id": "wxl.modern-m2",
+  "name": "Modern M2",
+  "version": "1.0.0",
+  "abi": "0.5",
+  "description": "Loads models authored for newer versions of the game (MD21, inner versions 272-274) natively: the container is read in place, records are normalized to the client's shapes, textures resolve by FileDataID, over-budget submeshes are split, and modern shader ids are decoded into the client's material contract. x64 port of manatactical/wxl-modern-m2 (7f793b1).",
+  "binaries": {
+    "win-x64": "bin/x64/wxl-modern-m2.dll"
+  },
+  "requires": [
+    { "service": "wxl.m2file", "version": 1 },
+    { "service": "wxl.storage", "version": 1 }
+  ]
+}
