@@ -396,7 +396,9 @@ namespace wxl::modern::assets::m2::skin
          * @brief Clamps source material blend modes the client blend table cannot index to Add, and drops
          *        only the render-flag bits this client has no meaning for.
          *
-         * A blend mode above 6 is set to Add (4). materials.offset is a raw pointer here.
+         * A blend mode above 7 is set to Add (4). Mode 7 (premultiplied blend add) is kept: the x64
+         * client's blend tables have it (GxBlend_BlendAdd, mod-support branch). materials.offset is a
+         * raw pointer here.
          * @param md Parsed model header whose material array is adjusted in place.
          */
         void FixRenderFlags(fmt::M2Header* md)
@@ -407,7 +409,7 @@ namespace wxl::modern::assets::m2::skin
             {
                 uint16_t& flag  = mats[i * 2 + 0];
                 uint16_t& blend = mats[i * 2 + 1];
-                if (blend > 6) { blend = 4; flag |= 0x5; }
+                if (blend > 7) { blend = 4; flag |= 0x5; }
                 flag &= kMaterialFlagMask;
             }
         }
