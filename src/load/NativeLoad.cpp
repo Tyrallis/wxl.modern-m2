@@ -76,6 +76,20 @@ namespace
         bool                  parsed = false;
     };
     std::unordered_map<const void*, Native> g_native;
+    // A model read natively, by its path, until it is parsed: the read stage does not name the
+    // client's file (CM2Shared), the parse does.
+    std::unordered_map<std::string, Native> g_pending;
+
+    std::string PathKey(const char* name)
+    {
+        std::string key = name ? name : "";
+        for (char& c : key)
+        {
+            if (c == '/') c = '\\';
+            else if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        }
+        return key;
+    }
 
     /// The READ phase on the raw container. POD locals only: it runs under the SEH guard.
     void ReadCore(uint8_t* buf, uint32_t size, Scan& s, uint32_t& bodySize, Outcome& out)
@@ -191,9 +205,8 @@ namespace wxl_modern_m2
         return g_native.count(file) != 0;
     }
 
-    bool OnModelRead(wxl_m2file& file)
+    bool OnModelRead(M2File& file)
     {
-        g_native.erase(file.file); // the client reuses CM2Shared addresses
         auto* buf = static_cast<uint8_t*>(file.data);
         if (!buf || file.size < 8 || Rd32(buf) != fmt::kMagicMD21) return true; // a stock model
 
@@ -211,14 +224,24 @@ namespace wxl_modern_m2
         }
 
         file.size = bodySize;
-        Native& native = g_native[file.file];
+        Native& native = g_pending[PathKey(file.name)];
+        native = Native{};
         native.txid.assign(scan.txid, scan.txid + scan.txidCount);
         native.out = out;
         return true;
     }
 
-    void OnModelParsed(wxl_m2file& file)
+    void OnModelParsed(M2File& file)
     {
+        // The client reuses CM2Shared addresses: what was kept for this address is a former file's.
+        auto pending = g_pending.find(PathKey(file.name));
+        if (pending == g_pending.end())
+        {
+            g_native.erase(file.file);
+            return;
+        }
+        g_native[file.file] = std::move(pending->second);
+        g_pending.erase(pending);
         auto it = g_native.find(file.file);
         if (it == g_native.end() || it->second.parsed) return;
         Native&  native = it->second;

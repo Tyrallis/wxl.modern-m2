@@ -79,7 +79,7 @@ namespace wxl_modern_m2
 {
     void SetBoneSplit(bool enabled) { g_boneSplit = enabled; }
 
-    void OnSkinParsed(wxl_m2file& file)
+    void OnSkinParsed(M2File& file)
     {
         if (!file.data || !file.skin) return;
         const char* name = file.name ? file.name : "?";

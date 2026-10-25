@@ -39,6 +39,8 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
+#include <cstring>
 
 namespace wxl_modern_m2
 {
@@ -131,19 +133,83 @@ namespace
 {
     using namespace wxl_modern_m2;
 
-    uint32_t g_watch = 0;
+    // The runtime raises the loader's stages as events; each is subscribed raw and handed to the
+    // stage's entry point as an M2File.
+    wxl::Subscription g_load, g_parsed, g_skin, g_sequence;
 
-    wxl_bool WXL_CALL OnFile(wxl_m2file* file, void*)
+    std::string Path(wxl_str path) { return path.data ? std::string(path.data, path.size) : std::string(); }
+
+    /// ModelLoad: the bytes as read, before the client parses them. A modern model (MD21) is
+    /// rewritten in a copy, handed back as the replacement the client parses instead.
+    void WXL_CALL OnModelLoadEvent(void*, const void* raw)
     {
-        switch (file->stage)
+        const auto* args = static_cast<const wxl_model_load_args*>(raw);
+        const auto* bytes = static_cast<const uint8_t*>(args->data);
+        if (!bytes || args->size < 8 || !args->replacement || !args->replacement_size) return;
+        uint32_t magic = 0;
+        std::memcpy(&magic, bytes, sizeof magic);
+        if (magic != wxl::structure::m2::kMagicMD21) return; // a stock model: parsed as read
+
+        // Kept until the next model: the runtime copies the replacement into the client's buffer.
+        static std::vector<uint8_t> s_copy;
+        static std::string          s_name;
+        static const uint8_t        kRefused[4] = {};
+        s_copy.assign(bytes, bytes + args->size);
+        s_name = Path(args->path);
+        M2File file;
+        file.stage = kStageRead;
+        file.name  = s_name.c_str();
+        file.data  = s_copy.data();
+        file.size  = static_cast<uint32_t>(s_copy.size());
+        if (!OnModelRead(file))
         {
-        case WXL_M2FILE_READ:     return OnModelRead(*file) ? WXL_TRUE : WXL_FALSE;
-        case WXL_M2FILE_PARSED:   OnModelParsed(*file); break;
-        case WXL_M2FILE_SKIN:     OnSkinParsed(*file); break;
-        case WXL_M2FILE_SEQUENCE: OnSequenceRead(*file); break;
-        default: break;
+            // Nothing the client can parse: it reports the file corrupt, as for a bad read.
+            *args->replacement      = kRefused;
+            *args->replacement_size = sizeof kRefused;
+            return;
         }
-        return WXL_TRUE;
+        *args->replacement      = s_copy.data();
+        *args->replacement_size = file.size;
+    }
+
+    void WXL_CALL OnModelParsedEvent(void*, const void* raw)
+    {
+        const auto* args = static_cast<const wxl_model_parsed_args*>(raw);
+        const std::string name = Path(args->path);
+        M2File file;
+        file.stage = kStageParsed;
+        file.file  = args->file;
+        file.name  = name.c_str();
+        file.data  = args->header;
+        file.size  = args->size;
+        OnModelParsed(file);
+    }
+
+    void WXL_CALL OnSkinParsedEvent(void*, const void* raw)
+    {
+        const auto* args = static_cast<const wxl_skin_profile_parsed_args*>(raw);
+        const std::string name = Path(args->path);
+        M2File file;
+        file.stage = kStageSkin;
+        file.file  = args->file;
+        file.name  = name.c_str();
+        file.data  = args->header;
+        file.skin  = args->skin;
+        OnSkinParsed(file);
+    }
+
+    void WXL_CALL OnSequenceEvent(void*, const void* raw)
+    {
+        const auto* args = static_cast<const wxl_model_sequence_args*>(raw);
+        const std::string name = Path(args->path);
+        M2File file;
+        file.stage          = kStageSequence;
+        file.file           = args->file;
+        file.name           = name.c_str();
+        file.sequence       = const_cast<void*>(args->data); // the client's own buffer, unwrapped in place
+        file.sequence_size  = args->size;
+        file.sequence_index = args->sequence_index;
+        OnSequenceRead(file);
     }
 
     class ModernM2Mod final : public wxl::Mod
@@ -162,8 +228,16 @@ namespace
                 return WXL_E_UNSUPPORTED;
             }
             SetBoneSplit(ConfigFlag("BoneSplit"));
-            const wxl_result watched = g_m2file->watch_files(&OnFile, nullptr, &g_watch);
-            if (watched != WXL_OK) return watched;
+            g_load     = wxl::Subscribe(WXL_EV_ModelLoad, &OnModelLoadEvent, nullptr);
+            g_parsed   = wxl::Subscribe(WXL_EV_ModelParsed, &OnModelParsedEvent, nullptr);
+            g_skin     = wxl::Subscribe(WXL_EV_SkinProfileParsed, &OnSkinParsedEvent, nullptr);
+            g_sequence = wxl::Subscribe(WXL_EV_ModelSequenceLoad, &OnSequenceEvent, nullptr);
+            if (!g_load || !g_parsed || !g_skin || !g_sequence)
+            {
+                WLOG_ERROR("the runtime does not raise the model loader's events (ModelLoad, ModelParsed, "
+                           "SkinProfileParsed, ModelSequenceLoad); nothing to do");
+                return WXL_E_UNSUPPORTED;
+            }
             WLOG_INFO("native M2 reader active (source versions %u-%u, read in place, parsed by the client)",
                       wxl::modern::assets::m2::kSourceVersionMin, wxl::modern::assets::m2::kSourceVersionMax);
             return WXL_OK;
@@ -173,8 +247,10 @@ namespace
 
         void OnUnload() override
         {
-            if (g_m2file && g_watch) g_m2file->unwatch_files(g_watch);
-            g_watch = 0;
+            g_load     = wxl::Subscription();
+            g_parsed   = wxl::Subscription();
+            g_skin     = wxl::Subscription();
+            g_sequence = wxl::Subscription();
         }
     };
 }

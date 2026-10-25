@@ -105,11 +105,34 @@ namespace wxl_modern_m2
         return Point(a, copy, static_cast<uint32_t>(count));
     }
 
-    // Per-stage entry points, called by Module.cpp's watcher.
-    bool OnModelRead(wxl_m2file& file);      // load/NativeLoad.cpp: WXL_M2FILE_READ
-    void OnModelParsed(wxl_m2file& file);    // load/NativeLoad.cpp: WXL_M2FILE_PARSED
-    void OnSkinParsed(wxl_m2file& file);     // compat/ModernM2.cpp: WXL_M2FILE_SKIN
-    void OnSequenceRead(wxl_m2file& file);   // load/AnimUnwrap.cpp: WXL_M2FILE_SEQUENCE
+    /// One stage of a model file, as Module.cpp hands it over from the runtime's model events
+    /// (ModelLoad, ModelParsed, SkinProfileParsed, ModelSequenceLoad).
+    enum M2FileStage : uint32_t
+    {
+        kStageRead = 1,     ///< read whole, not parsed: `data` and `size` may be rewritten and shortened
+        kStageParsed = 2,   ///< parsed: `data` is the header, arrays self-relative
+        kStageSkin = 3,     ///< its skin profile parsed: `skin` is its header
+        kStageSequence = 4, ///< an external sequence read: `sequence` may be rewritten in place
+    };
+
+    struct M2File
+    {
+        uint32_t    stage = 0;
+        void*       file = nullptr; ///< the client's CM2Shared; null at kStageRead (the event does not say)
+        const char* name = nullptr; ///< the path the client opened it by
+        void*       data = nullptr;
+        uint32_t    size = 0;
+        void*       skin = nullptr;
+        void*       sequence = nullptr;
+        uint32_t    sequence_size = 0;
+        uint32_t    sequence_index = 0;
+    };
+
+    // Per-stage entry points, called by Module.cpp.
+    bool OnModelRead(M2File& file);      // load/NativeLoad.cpp: kStageRead
+    void OnModelParsed(M2File& file);    // load/NativeLoad.cpp: kStageParsed
+    void OnSkinParsed(M2File& file);     // compat/ModernM2.cpp: kStageSkin
+    void OnSequenceRead(M2File& file);   // load/AnimUnwrap.cpp: kStageSequence
     void LogSessionStats();                  // load/NativeLoad.cpp
 
     // load/NativeLoad.cpp: the files the native reader filled (the registry upstream keyed by model).

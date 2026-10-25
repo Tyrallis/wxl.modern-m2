@@ -67,7 +67,7 @@ namespace
 
 namespace wxl_modern_m2
 {
-    void OnSequenceRead(wxl_m2file& file)
+    void OnSequenceRead(M2File& file)
     {
         uint32_t unwrappedTo = 0;
         UnwrapGuarded(static_cast<uint8_t*>(file.sequence), file.sequence_size, &unwrappedTo);
