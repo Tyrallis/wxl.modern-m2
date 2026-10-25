@@ -160,7 +160,7 @@ namespace wxl::modern::assets::m2::skin
             if (twoTex) shaderToSave = BlendOverride(blendOverride, blend1, blend2);
             else        textureCount = 1;
 
-            b->flags &= 0x10;
+            b->flags &= 0x14; // 0x10, and 0x4: projected onto the terrain
             b->shaderId = shaderToSave;
 
             if (textureCount == 1)
@@ -267,7 +267,7 @@ namespace wxl::modern::assets::m2::skin
         {
             uint16_t shaderId = b.shaderId;
             uint16_t textureCount = b.textureCount;
-            b.flags &= 0x10;
+            b.flags &= 0x14; // 0x10, and 0x4: projected onto the terrain
 
             if (shaderId >= kSourceShaderMin)
             {
@@ -280,7 +280,7 @@ namespace wxl::modern::assets::m2::skin
                     b.shaderId               = static_cast<uint16_t>(kSourceShaderMin | (sourceIdx + 1));
                     b.textureCount           = 2;
                     b.textureCoordComboIndex = LookupPair(texUnitLookup, 0, -1);
-                    b.flags                 &= 0x10;
+                    b.flags                 &= 0x14;
                     piece.push_back(b);
                     return;
                 }
@@ -293,7 +293,13 @@ namespace wxl::modern::assets::m2::skin
                 {
                 case 5: case 8: case 10: case 12: case 16: case 23:
                     shaderId = 0; textureCount = 1; break;
-                case 21: case 33: case 35:
+                // Retail's table: 21 is Mod_Mod and 33 Mod_Mod2x, both over T1 and T2 with an edge
+                // fade (alpha falls off where the surface turns edge-on) this client has no shader
+                // for. Down to Mod2x, 33 draws as the same geometry does under a packed 0x4014; as
+                // Mod_Mod it came out a flat, hard-edged plane.
+                case 33:
+                    shaderId = 0x4014; textureCount = 2; break;
+                case 21: case 35:
                     shaderId = 0x4011; textureCount = 2; outIsAddAlpha = true; break;
                 default:
                     shaderId = 0x0010; textureCount = 1; break;
@@ -382,6 +388,54 @@ namespace wxl::modern::assets::m2::skin
             WLOG_INFO("modern-assets: '%s' synthesized %u texture-transform lookup entries", name, needed);
         }
 
+        /**
+         * @brief Gives a three-texture batch the two textures that keep its shape.
+         *
+         * Retail draws some batches from three textures; the client combines two. The third of such a
+         * batch is its mask -- the ring of a spell's ground circle, the outline of a glow plane, on the
+         * second UV set, unscrolled -- and the second a detail layer over the first. Down to the first
+         * two, the batch is drawn as the whole rectangle of its quad. So the batch keeps the first and
+         * the third: new texture- and transform-lookup pairs are appended and the batch pointed at them.
+         * Packed shader ids only (an effect index decides its own textures).
+         * @param md   Parsed model header (arrays are raw pointers by this point).
+         * @param skin Live skin profile whose source batches are adjusted in place.
+         * @param name Model path, used for logging.
+         */
+        void KeepMaskTexture(fmt::M2Header* md, Skin* skin, const char* name)
+        {
+            const int16_t* tex = wxl_modern_m2::Ptr<int16_t>(md->textureCombos);
+            const int16_t* tt  = wxl_modern_m2::Ptr<int16_t>(md->textureTransformCombos);
+            if (!tex) return;
+            std::vector<int16_t> texBuf(tex, tex + md->textureCombos.count);
+            std::vector<int16_t> ttBuf;
+            if (tt) ttBuf.assign(tt, tt + md->textureTransformCombos.count);
+            const size_t texCount = texBuf.size(), ttCount = ttBuf.size();
+
+            uint32_t changed = 0;
+            for (uint32_t i = 0; i < skin->batchCount; ++i)
+            {
+                fmt::M2Batch& b = skin->batches[i];
+                if (b.textureCount != 3 || b.shaderId >= kSourceShaderMin) continue;
+                const uint32_t t = b.textureComboIndex;
+                if (t + 2 >= texCount) continue;
+                const uint16_t newTex = LookupPair(texBuf, texBuf[t], texBuf[t + 2]);
+                uint16_t newTT = b.textureTransformComboIndex;
+                const uint32_t x = b.textureTransformComboIndex;
+                if (x != 0xFFFFu && x + 2 < ttCount) newTT = LookupPair(ttBuf, ttBuf[x], ttBuf[x + 2]);
+                b.textureComboIndex          = newTex;
+                b.textureTransformComboIndex = newTT;
+                b.textureCount               = 2;
+                // The mask multiplies what the first two made, colour and alpha: its op is Mod2x
+                // whatever the second texture's was (an Add would lay the whole quad on top).
+                b.shaderId = static_cast<uint16_t>((b.shaderId & ~0x7u) | 4u);
+                ++changed;
+            }
+            if (!changed) return;
+            if (texBuf.size() != texCount) wxl_modern_m2::Replace(md->textureCombos, texBuf.data(), texBuf.size());
+            if (ttBuf.size() != ttCount) wxl_modern_m2::Replace(md->textureTransformCombos, ttBuf.data(), ttBuf.size());
+            WLOG_INFO("modern-assets: '%s' %u three-texture batch(es) drawn with their mask", name, changed);
+        }
+
         /// Material render-flag bits this client understands and that must survive the mask.
         ///   0x00-0x1F : the classic render flags (unlit, no-fog, two-sided, ...).
         ///   0x40      : SHADOW-EXCLUDE. The stock caster collector (0x00834660) tests it and drops the
@@ -439,6 +493,7 @@ namespace wxl::modern::assets::m2::skin
         std::vector<fmt::M2Batch> batches;
         uint32_t nTransparencyLookup = md->textureWeightCombos.count;
         EnsureTextureTransformLookup(md, skin, name);
+        KeepMaskTexture(md, skin, name);
         uint32_t nTransformLookup = md->textureTransformCombos.count;
 
         // The bone split itself already ran unconditionally (ModernM2's OnSkinFinalize) before this is
