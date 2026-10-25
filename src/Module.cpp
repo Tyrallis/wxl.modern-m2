@@ -179,4 +179,4 @@ namespace
     };
 }
 
-WXL_MOD(ModernM2Mod, "wxl.modern-m2", "Modern M2", 1)
+WXL_MOD(ModernM2Mod, "wxl.modern-m2", "Modern M2")

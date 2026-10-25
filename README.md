@@ -91,6 +91,7 @@ The `wxl.m2file` service and the client loader seams, on the `x64-port` branch o
 ## Building
 
 Needs a checkout of the WarcraftXL SDK (`x64-port` branch) at `../../sdk`, or pass `-DWXL_SDK_DIR=...`.
+Build with Visual Studio 2022: the 2026 Insiders compiler (MSVC 14.50) crashes on the SDK's headers. Since 1.1.0 the mod needs the client and SDK of `x64-port` at WarcraftXL ABI 0.1.15; older clients refuse it.
 
 ```
 cmake -S . -B build -G "Visual Studio 18 2026"
